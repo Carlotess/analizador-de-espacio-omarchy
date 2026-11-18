@@ -10,8 +10,7 @@ Mira de un vistazo qué carpetas y archivos ocupan más espacio, con **click der
 |---|---|
 | `treemap` | Vista **gráfica** (treemap): cada rectángulo es proporcional a su tamaño. Navegable con teclado y mouse. |
 | `android-du` | Lista en terminal las carpetas del teléfono ordenadas por tamaño. |
-| Script de Nautilus **Analizar espacio (grafico)** | Click derecho → abre el treemap de esa carpeta (del PC o del teléfono). |
-| Script de Nautilus **Analizar espacio** | Click derecho → abre [`gdu`](https://github.com/dundee/gdu) (TUI) en una terminal. |
+| Script de Nautilus **Analizador de espacio grafico** | Click derecho → abre el treemap de esa carpeta (del PC o del teléfono). |
 
 ### Características del treemap
 
@@ -26,10 +25,10 @@ Mira de un vistazo qué carpetas y archivos ocupan más espacio, con **click der
 Dependencias:
 
 ```bash
-sudo pacman -S --needed python chromium nautilus gdu android-tools
+sudo pacman -S --needed python chromium nautilus android-tools
 ```
 
-`gdu` solo se usa para la vista TUI y `android-tools` (adb) solo para Android.
+`android-tools` (adb) solo hace falta para Android.
 
 ```bash
 git clone https://github.com/Carlotess/analizador-de-espacio-omarchy.git
@@ -43,7 +42,7 @@ Esto copia los comandos a `~/.local/bin` y los scripts a `~/.local/share/nautilu
 
 ### Desde Nautilus
 
-Click derecho sobre una carpeta → **Scripts** → **Analizar espacio (grafico)** (o **Analizar espacio** para la TUI).
+Click derecho sobre una carpeta → **Scripts** → **Analizador de espacio grafico**.
 Si Nautilus está abierto dentro del teléfono (`mtp://…`), analiza esa carpeta del teléfono automáticamente.
 
 ### Desde la terminal
@@ -79,7 +78,7 @@ android-du /sdcard/Android 50     # ruta y cuántas líneas mostrar
 ## Limitaciones
 
 - Los tamaños usan 1 GB = 1024 MB, así que un disco de "696 GB" del fabricante aparece como 648 GB.
-- No hay opción de borrar desde el treemap; para eso usa la vista TUI (`gdu`, tecla `d`).
+- No hay opción de borrar desde el treemap; es solo de consulta.
 - Escanear una carpeta enorme o un teléfono lleno puede tardar; por eso se escanea por niveles.
 - Se escanea una vez: si los archivos cambian, hay que volver a abrir la herramienta.
 

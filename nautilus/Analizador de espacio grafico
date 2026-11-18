@@ -1,5 +1,5 @@
 #!/bin/bash
-# Click derecho > Scripts > Analizar espacio (grafico)
+# Click derecho > Scripts > Analizador de espacio grafico
 export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:$PATH"
 dec() { printf '%b' "$(echo "$1" | sed 's|%|\\x|g')"; }
 sel_uri="${NAUTILUS_SCRIPT_SELECTED_URIS%%$'\n'*}"

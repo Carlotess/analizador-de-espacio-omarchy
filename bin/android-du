@@ -1,0 +1,6 @@
+#!/bin/bash
+# Uso: android-du [ruta]   (por defecto /sdcard). Calcula tamaños EN el teléfono vía adb.
+p="${1:-/sdcard}"
+echo "Escaneando $p ... (puede tardar un poco la primera vez)"
+adb shell "du -k -d 1 '${p%/}/' 2>/dev/null" | sort -rn | head -${2:-30} \
+ | numfmt --field=1 --from-unit=1024 --to=iec --suffix=B --padding=8

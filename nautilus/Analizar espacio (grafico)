@@ -1,0 +1,18 @@
+#!/bin/bash
+# Click derecho > Scripts > Analizar espacio (grafico)
+export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:$PATH"
+dec() { printf '%b' "$(echo "$1" | sed 's|%|\\x|g')"; }
+sel_uri="${NAUTILUS_SCRIPT_SELECTED_URIS%%$'\n'*}"
+sel_path="${NAUTILUS_SCRIPT_SELECTED_FILE_PATHS%%$'\n'*}"
+uri="${sel_uri:-$NAUTILUS_SCRIPT_CURRENT_URI}"
+if [[ "$uri" == mtp://* ]]; then
+  rest="$(dec "${uri#mtp://*/}")"; sub="${rest#*/}"; [ "$sub" = "$rest" ] && sub=""
+  notify-send -t 4000 "Treemap" "Escaneando el teléfono... puede tardar 1-2 min"
+  setsid -w treemap --android "/sdcard${sub:+/$sub}" || notify-send -u critical "Treemap" "Falló el escaneo (¿adb conectado?)"
+  exit
+fi
+target="$sel_path"
+[ -z "$target" ] && target="$(dec "${NAUTILUS_SCRIPT_CURRENT_URI#file://}")"
+[ -f "$target" ] && target="$(dirname "$target")"
+notify-send -t 3000 "Treemap" "Escaneando $target ..."
+setsid -w treemap "$target" || notify-send -u critical "Treemap" "Falló el escaneo"

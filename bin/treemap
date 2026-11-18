@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+"""treemap — vista gráfica de uso de espacio (estilo WizTree).
+
+Uso:
+  treemap [carpeta]          carpeta local (por defecto la actual)
+  treemap --android [ruta]   carpeta del teléfono vía adb (por defecto /sdcard)
+  opciones: -d N  profundidad de cada escaneo (por defecto 4)
+
+Levanta un servidor local mientras la ventana esté abierta: al entrar a una
+carpeta no escaneada aún, la ventana pide el escaneo y muestra "Escaneando…".
+"""
+import argparse, html, json, os, secrets, subprocess, sys, threading, time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse, parse_qs
+
+ap = argparse.ArgumentParser()
+ap.add_argument("path", nargs="?")
+ap.add_argument("--android", action="store_true")
+ap.add_argument("-d", "--depth", type=int, default=4)
+a = ap.parse_args()
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+TOKEN = secrets.token_urlsafe(12)
+scan_lock = threading.Lock()
+last_seen = time.time()
+bye_at = None
+
+if a.android:
+    ROOT = (a.path or "/sdcard").rstrip("/") or "/"
+else:
+    ROOT = os.path.abspath(a.path or ".")
+
+
+def sh(cmd, timeout=None):
+    return subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=timeout).stdout
+
+
+def scan(path, depth):
+    """Escanea `path` hasta `depth` niveles y devuelve el árbol compacto."""
+    base = path.rstrip("/")
+    q = (base or "") + "/"
+    if a.android:
+        out = sh(["adb", "shell",
+                  f"du -a -k -d {depth} '{q}' 2>/dev/null; echo '@@DIRS@@'; "
+                  f"find '{q}' -mindepth 1 -maxdepth {depth} -type d 2>/dev/null"])
+        out, _, dl = out.partition("@@DIRS@@\n")
+        realdirs = set(x.rstrip("/") for x in dl.splitlines() if x)
+    else:
+        out = sh(["du", "-a", "-k", "-x", "-d", str(depth), path or "/"])
+        realdirs = None
+    rows = []
+    for line in out.splitlines():
+        try:
+            sz, p = line.split("\t", 1)
+            rows.append((int(sz) * 1024, p.rstrip("/")))
+        except ValueError:
+            continue
+    parents = {os.path.dirname(p) for _, p in rows}
+    tree = {"name": base or "/", "size": 0, "children": {}}
+    for sz, p in sorted(rows, key=lambda r: r[1].count("/")):
+        if p == base:
+            tree["size"] = sz
+            continue
+        rel = p[len(base):].lstrip("/")
+        parts = rel.split("/")
+        node = tree
+        for part in parts[:-1]:
+            node = node["children"].setdefault(part, {"name": part, "size": 0, "children": {}, "dir": True})
+        leaf = node["children"].setdefault(parts[-1], {"name": parts[-1], "size": 0, "children": {}})
+        leaf["size"] = sz
+        if p in parents:
+            leaf["dir"] = True
+        elif realdirs is not None:
+            leaf["dir"] = p in realdirs
+        else:
+            leaf["dir"] = os.path.isdir(p) and not os.path.islink(p)
+    return finalize(tree, True)
+
+
+def finalize(n, root=False):
+    kids = [finalize(c) for c in n["children"].values()]
+    kids.sort(key=lambda c: -c["s"])
+    o = {"n": n["name"], "s": n["size"], "d": True if root else bool(n.get("dir"))}
+    if kids:
+        o["c"] = kids
+        rest = n["size"] - sum(c["s"] for c in kids)
+        if n["size"] and rest / n["size"] > 0.002:
+            kids.append({"n": "(sin detalle)", "s": rest, "d": False})
+    return o
+
+
+def disk_info(path):
+    try:
+        c = ["adb", "shell", f"df -k '{path.rstrip('/')}/'"] if a.android else ["df", "-k", "-P", path]
+        ln = sh(c, 20).strip().splitlines()[-1].split()
+        return {"total": int(ln[1]) * 1024, "used": int(ln[2]) * 1024,
+                "free": int(ln[3]) * 1024, "mount": ln[-1]}
+    except Exception:
+        return None
+
+
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *_):
+        pass
+
+    def send(self, code, body, ctype="application/json"):
+        b = body.encode() if isinstance(body, str) else body
+        self.send_response(code)
+        self.send_header("Content-Type", ctype + "; charset=utf-8")
+        self.send_header("Content-Length", str(len(b)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(b)
+
+    def do_POST(self):  # sendBeacon usa POST
+        self.do_GET()
+
+    def do_GET(self):
+        global last_seen, bye_at
+        u = urlparse(self.path)
+        parts = u.path.strip("/").split("/")
+        if parts[0] != TOKEN:
+            return self.send(404, "no")
+        last_seen = time.time()
+        bye_at = None
+        act = parts[1] if len(parts) > 1 else ""
+        q = parse_qs(u.query)
+        if act == "":
+            tpl = next((os.path.join(HERE, n) for n in ("treemap.html", ".treemap.html")
+                   if os.path.exists(os.path.join(HERE, n))), None)
+            if tpl is None:
+                return self.send(500, "Falta treemap.html junto a treemap")
+            page = open(tpl).read()
+            page = (page.replace("__ROOT__", json.dumps(ROOT))
+                        .replace("__DEPTH__", str(a.depth))
+                        .replace("__TITLE__", html.escape(ROOT)))
+            return self.send(200, page, "text/html")
+        if act == "scan":
+            p = q.get("p", [ROOT])[0]
+            d = int(q.get("d", [a.depth])[0])
+            # solo se permite escanear dentro de la raíz
+            if not (p == ROOT or p.startswith(ROOT.rstrip("/") + "/")):
+                return self.send(403, json.dumps({"error": "fuera de la raíz"}))
+            with scan_lock:
+                try:
+                    res = {"tree": scan(p, d)}
+                    if q.get("disk"):
+                        res["disk"] = disk_info(p)
+                    return self.send(200, json.dumps(res))
+                except Exception as e:
+                    return self.send(500, json.dumps({"error": str(e)}))
+        if act == "ping":
+            return self.send(200, "{}")
+        if act == "bye":
+            bye_at = time.time() + 4
+            return self.send(200, "{}")
+        self.send(404, "no")
+
+
+def watchdog():
+    while True:
+        time.sleep(1)
+        if (bye_at and time.time() > bye_at) or time.time() - last_seen > 600:
+            os._exit(0)
+
+
+srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+url = f"http://127.0.0.1:{srv.server_address[1]}/{TOKEN}/"
+threading.Thread(target=watchdog, daemon=True).start()
+
+chromium = "/usr/bin/chromium"
+if os.path.exists(chromium):
+    subprocess.Popen([chromium, f"--app={url}", "--window-size=1200,800",
+                      "--user-data-dir=" + os.path.expanduser("~/.cache/treemap-profile")],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+else:
+    subprocess.Popen(["xdg-open", url], start_new_session=True)
+
+srv.serve_forever()

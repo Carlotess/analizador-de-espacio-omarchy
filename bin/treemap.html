@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<title>Treemap — __TITLE__</title>
+<style>
+:root{--bg:#14161a;--fg:#e6e6e6;--mut:#8b9098}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:13px system-ui,sans-serif;display:flex;flex-direction:column;height:100vh;overflow:hidden}
+#disk{display:flex;align-items:center;gap:10px;padding:6px 12px;border-bottom:1px solid #2a2e35;color:var(--mut)}
+#disk .tr{flex:1;max-width:420px;height:10px;background:#2f6b4a;border-radius:5px;overflow:hidden}
+#disk .us{height:100%;background:#d9824a}
+#disk b{color:var(--fg)}
+#bar{padding:8px 12px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;border-bottom:1px solid #2a2e35}
+#bar a{cursor:pointer;color:#7cb7ff} #bar a:hover{text-decoration:underline}
+#bar span.t{margin-left:auto;color:var(--mut)}
+#bar span.h{color:#5d636c;font-size:12px;margin-left:12px}
+#map{position:relative;flex:1;margin:6px}
+.r{position:absolute;overflow:hidden;border:1px solid var(--bg);border-radius:2px;padding:3px 4px;line-height:1.25;cursor:default;transition:filter .1s}
+.r.d{cursor:pointer}
+.r:hover{filter:brightness(1.25)}
+.r.sel{outline:3px solid #fff;outline-offset:-3px;z-index:2;filter:brightness(1.15)}
+.r b{display:block;font-weight:600;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;color:#0d0d0d}
+.r i{font-style:normal;color:#000a;font-size:11px;white-space:nowrap}
+#tip{position:fixed;pointer-events:none;background:#000d;border:1px solid #444;border-radius:4px;padding:6px 8px;display:none;max-width:420px;word-break:break-all;z-index:9}
+#ov{position:fixed;inset:0;background:#14161ae6;display:none;place-items:center;text-align:center;z-index:20;font-size:16px}
+#ov .s{width:46px;height:46px;border:5px solid #2a2e35;border-top-color:#7cb7ff;border-radius:50%;animation:r 1s linear infinite;margin:0 auto 18px}
+@keyframes r{to{transform:rotate(360deg)}}
+#ov small{color:var(--mut);display:block;margin-top:4px;word-break:break-all;max-width:80vw}
+#ov button{margin-top:14px;padding:6px 14px;background:#2a2e35;color:var(--fg);border:0;border-radius:4px;cursor:pointer}
+</style></head><body>
+<div id="disk" style="display:none"></div><div id="bar"></div><div id="map"></div><div id="tip"></div>
+<div id="ov"><div><div class="s" id="sp"></div><div id="ovm"></div><small id="ovt"></small><button id="ovb" style="display:none">Cerrar</button></div></div>
+<script>
+const ROOT=__ROOT__, DEPTH=__DEPTH__;
+const hues=[210,150,35,330,270,185,60,0,110,300];
+const fmt=b=>{const u=['B','KB','MB','GB','TB'];let i=0;while(b>=1024&&i<4){b/=1024;i++}return b.toFixed(b<10&&i?1:0)+' '+u[i]};
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const map=document.getElementById('map'),bar=document.getElementById('bar'),tip=document.getElementById('tip');
+const ov=document.getElementById('ov');
+let stack=[],sels=[],sel=0,rects=[],busy=false,tick=null;
+
+const pathOf=st=>st.reduce((p,n,i)=>i===0?n.n:(p==='/'?'':p)+'/'+n.n,'');
+
+function showOv(msg,path){busy=true;ov.style.display='grid';document.getElementById('sp').style.display='block';
+  document.getElementById('ovb').style.display='none';document.getElementById('ovm').innerHTML=msg;
+  document.getElementById('ovt').textContent=path||'';const t0=Date.now();
+  const extra=document.getElementById('ovt');clearInterval(tick);
+  tick=setInterval(()=>extra.textContent=(path?path+'  ·  ':'')+Math.round((Date.now()-t0)/1000)+' s',500)}
+function hideOv(){busy=false;clearInterval(tick);ov.style.display='none'}
+function failOv(msg){clearInterval(tick);busy=true;document.getElementById('sp').style.display='none';
+  document.getElementById('ovm').textContent='Error: '+msg;document.getElementById('ovt').textContent='';
+  const b=document.getElementById('ovb');b.style.display='inline-block';b.onclick=hideOv}
+
+async function scan(path,withDisk){
+  const r=await fetch(`scan?p=${encodeURIComponent(path)}&d=${DEPTH}${withDisk?'&disk=1':''}`);
+  const j=await r.json();if(j.error)throw new Error(j.error);return j}
+
+// squarify
+function layout(items,x,y,w,h){
+  const total=items.reduce((s,i)=>s+i.s,0);if(!total)return[];
+  const sc=w*h/total,out=[];let rest=items.map(i=>({i,a:i.s*sc}));
+  while(rest.length){
+    const short=Math.min(w,h);let row=[],sum=0,worst=Infinity;
+    const wr=(r,s)=>{const mx=Math.max(...r.map(e=>e.a)),mn=Math.min(...r.map(e=>e.a));return Math.max(short*short*mx/(s*s),s*s/(short*short*mn))};
+    while(rest.length){const t=rest[0];const nr=[...row,t],ns=sum+t.a,nw=wr(nr,ns);
+      if(row.length&&nw>worst)break;row=nr;sum=ns;worst=nw;rest.shift()}
+    const th=sum/short;let off=0;
+    for(const e of row){const l=e.a/th;
+      if(w>=h)out.push({i:e.i,x:x,y:y+off,w:th,h:l});else out.push({i:e.i,x:x+off,y:y,w:l,h:th});off+=l}
+    if(w>=h){x+=th;w-=th}else{y+=th;h-=th}
+  }
+  return out;
+}
+
+function draw(){
+  map.innerHTML='';rects=[];const cur=stack[stack.length-1];
+  bar.innerHTML=stack.map((n,i)=>i<stack.length-1?`<a data-i="${i}">${esc(n.n.split('/').pop()||'/')}</a> /`:`<b>${esc(n.n.split('/').pop()||'/')}</b>`).join(' ')
+    +`<span class="t">${fmt(cur.s)}</span><span class="h">↑↓←→ mover · Enter entrar · Esc subir</span>`;
+  bar.querySelectorAll('a').forEach(a=>a.onclick=()=>{stack=stack.slice(0,+a.dataset.i+1);sels=sels.slice(0,stack.length-1);sel=0;draw()});
+  const kids=(cur.c||[]).filter(c=>c.s>0);
+  layout(kids,0,0,map.clientWidth,map.clientHeight).forEach(r=>{
+    if(r.w<3||r.h<3)return;
+    const idx=kids.indexOf(r.i),hue=hues[idx%hues.length];
+    const el=document.createElement('div');el.className='r'+(r.i.d?' d':'');
+    const light=r.i.d?62:76,sat=r.i.d?55:28;
+    el.style.cssText=`left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px;background:hsl(${hue} ${sat}% ${light}%)`;
+    if(r.w>50&&r.h>28)el.innerHTML=`<b>${esc(r.i.n)}</b><i>${fmt(r.i.s)}</i>`;
+    else if(r.w>40&&r.h>14)el.innerHTML=`<b>${esc(r.i.n)}</b>`;
+    const k=rects.length;
+    el.onclick=()=>{sel=k;enter(r.i)};
+    el.onmousemove=e=>{tip.style.display='block';tip.style.left=Math.min(e.clientX+14,innerWidth-440)+'px';tip.style.top=(e.clientY+14)+'px';
+      tip.innerHTML=`<b>${esc(r.i.n)}</b><br>${fmt(r.i.s)} · ${(r.i.s/cur.s*100).toFixed(1)}%${r.i.d?'<br>click / Enter para entrar':''}`};
+    el.onmouseleave=()=>tip.style.display='none';
+    map.appendChild(el);rects.push({...r,el});
+  });
+  if(sel>=rects.length)sel=0;
+  if(rects[sel])rects[sel].el.classList.add('sel');
+}
+
+function select(k){if(!rects[k])return;rects[sel]&&rects[sel].el.classList.remove('sel');sel=k;rects[k].el.classList.add('sel')}
+
+function move(dir){
+  if(!rects.length)return;const c=rects[sel],cx=c.x+c.w/2,cy=c.y+c.h/2;let best=-1,bs=Infinity;
+  rects.forEach((r,k)=>{if(k===sel)return;const dx=r.x+r.w/2-cx,dy=r.y+r.h/2-cy;
+    const main={R:dx,L:-dx,D:dy,U:-dy}[dir],cross=(dir==='R'||dir==='L')?Math.abs(dy):Math.abs(dx);
+    if(main<=1)return;const s=main+2*cross;if(s<bs){bs=s;best=k}});
+  if(best>=0)select(best);
+}
+
+async function enter(node){
+  if(busy||!node.d)return;
+  if(!node.c){
+    const path=pathOf([...stack,node]);
+    showOv('Escaneando…',path);
+    try{const j=await scan(path);hideOv();
+      if(j.tree.c)node.c=j.tree.c;else{node.d=false;draw();return}
+    }catch(e){failOv(e.message);return}
+  }
+  sels.push(sel);stack.push(node);sel=0;draw();
+}
+function up(){if(busy||stack.length<2)return;stack.pop();sel=sels.pop()||0;draw()}
+
+addEventListener('resize',()=>!busy&&draw());
+addEventListener('keydown',e=>{
+  if(busy)return;
+  const m={ArrowRight:'R',ArrowLeft:'L',ArrowDown:'D',ArrowUp:'U'}[e.key];
+  if(m){e.preventDefault();move(m)}
+  else if(e.key==='Enter'){e.preventDefault();rects[sel]&&enter(rects[sel].i)}
+  else if(e.key==='Escape'||e.key==='Backspace'){e.preventDefault();up()}
+});
+addEventListener('pagehide',()=>navigator.sendBeacon('bye'));
+setInterval(()=>fetch('ping').catch(()=>{}),30000);
+
+(async()=>{
+  showOv('Escaneando…',ROOT);
+  try{const j=await scan(ROOT,true);hideOv();stack=[j.tree];
+    const D=j.disk;if(D){const p=D.used/D.total*100,el=document.getElementById('disk');el.style.display='flex';
+      el.innerHTML=`<span>Disco <b>${esc(D.mount)}</b></span><div class="tr"><div class="us" style="width:${p.toFixed(1)}%"></div></div><span>Libre: <b>${fmt(D.free)}</b> de ${fmt(D.total)} · usado ${p.toFixed(0)}%</span>`}
+    draw();
+  }catch(e){failOv(e.message)}
+})();
+</script></body></html>
